@@ -1,0 +1,75 @@
+import pymc as pm
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+
+# Example DataFrame for demonstration (replace with your actual data loading step)
+data = pd.DataFrame({
+    'OrderSize': [0.2, 0.3, 0.1, 0.4],
+    'Volatility': [15, 25, 10, 20],
+    'Spread': [10, 12, 8, 11],
+    'Cost': [5, -3, 8, 2]
+})
+
+# Run your PyMC model and obtain the trace
+with pm.Model() as model:
+    # Define priors and model here...
+    beta0 = pm.Normal('beta0', mu=0, sigma=10)
+    beta1 = pm.Normal('beta1', mu=0, sigma=10)
+    beta2 = pm.Normal('beta2', mu=0, sigma=10)
+    gamma0 = pm.Normal('gamma0', mu=0, sigma=10)
+    gamma1 = pm.Normal('gamma1', mu=0, sigma=10)
+    gamma2 = pm.Normal('gamma2', mu=0, sigma=10)
+    alpha0 = pm.Normal('alpha0', mu=0, sigma=10)
+    alpha1 = pm.Normal('alpha1', mu=0, sigma=10)
+
+    # Model equations for ALD
+    mu = -pm.math.exp(beta0 + beta1 * pm.math.log(data['OrderSize']) + beta2 * pm.math.log(data['Volatility']))
+    b = pm.math.exp(gamma0 + gamma1 * pm.math.log(data['OrderSize']) + gamma2 * pm.math.log(data['Volatility']))
+    r = pm.math.exp(alpha0 + alpha1 * pm.math.log(data['OrderSize']))
+    kappa = 0.5 * (r + pm.math.sqrt(4 + r**2))  # Asymmetry parameter transformation
+
+    # Define the ALD likelihood
+    Y_obs = pm.AsymmetricLaplace('Y_obs', mu=mu, b=b, kappa=kappa, observed=data['Cost'])
+
+    # Sample from the posterior
+    trace = pm.sample(1000, tune=1000, target_accept=0.95, return_inferencedata=True)
+
+# Extract posterior samples for predictions
+mu_samples = trace.posterior['mu'].mean(dim=["chain", "draw"]).values
+b_samples = trace.posterior['b'].mean(dim=["chain", "draw"]).values
+kappa_samples = trace.posterior['kappa'].mean(dim=["chain", "draw"]).values
+
+# Predict costs using the mean of the posterior samples
+predicted_costs = mu_samples + b_samples * (1 / kappa_samples - kappa_samples)
+
+# Plot observed vs. predicted costs
+fig = go.Figure()
+
+# Add scatter plot of observed vs. predicted costs
+fig.add_trace(go.Scatter(
+    x=data['Cost'], 
+    y=predicted_costs,
+    mode='markers',
+    name='Observed vs. Predicted',
+    marker=dict(color='rgba(255, 0, 0, 0.6)')
+))
+
+# Add line y=x for reference
+fig.add_trace(go.Scatter(
+    x=[min(data['Cost']), max(data['Cost'])],
+    y=[min(data['Cost']), max(data['Cost'])],
+    mode='lines',
+    name='Ideal Fit (y=x)',
+    line=dict(color='rgba(0, 0, 255, 0.5)', dash='dash')
+))
+
+# Update layout
+fig.update_layout(
+    title='Observed vs. Predicted Costs',
+    xaxis_title='Observed Cost',
+    yaxis_title='Predicted Cost',
+    showlegend=True
+)
+
+fig.show()
