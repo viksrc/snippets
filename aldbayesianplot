@@ -35,41 +35,76 @@ with pm.Model() as model:
     # Sample from the posterior
     trace = pm.sample(1000, tune=1000, target_accept=0.95, return_inferencedata=True)
 
-# Extract posterior samples for predictions
-mu_samples = trace.posterior['mu'].mean(dim=["chain", "draw"]).values
-b_samples = trace.posterior['b'].mean(dim=["chain", "draw"]).values
-kappa_samples = trace.posterior['kappa'].mean(dim=["chain", "draw"]).values
+beta0_samples = trace.posterior['beta0'].values.flatten()
+beta1_samples = trace.posterior['beta1'].values.flatten()
+beta2_samples = trace.posterior['beta2'].values.flatten()
+gamma0_samples = trace.posterior['gamma0'].values.flatten()
+gamma1_samples = trace.posterior['gamma1'].values.flatten()
+gamma2_samples = trace.posterior['gamma2'].values.flatten()
+alpha0_samples = trace.posterior['alpha0'].values.flatten()
+alpha1_samples = trace.posterior['alpha1'].values.flatten()
 
-# Predict costs using the mean of the posterior samples
-predicted_costs = mu_samples + b_samples * (1 / kappa_samples - kappa_samples)
+# Define a custom function to sample from the Asymmetric Laplace Distribution
+def asymmetric_laplace(loc, scale, kappa, size=1):
+    u = np.random.uniform(0, 1, size)
+    sample = loc + (scale / kappa) * np.where(u < 1 / (1 + kappa), 
+                                              np.log(u * (1 + kappa)), 
+                                              -np.log((1 - u) * (1 + kappa)))
+    return sample
 
-# Plot observed vs. predicted costs
+# Generate predicted costs by sampling from the fitted ALD for each observation using multiple posterior samples
+predicted_costs = []
+
+# Use a subset of posterior samples to generate predicted costs
+for i in range(len(data)):
+    for j in range(100):  # Use 100 posterior samples for predictions
+        mu_pred = -np.exp(
+            beta0_samples[j] +
+            beta1_samples[j] * np.log(data['OrderSize'][i]) +
+            beta2_samples[j] * np.log(data['Volatility'][i])
+        )
+        b_pred = np.exp(
+            gamma0_samples[j] +
+            gamma1_samples[j] * np.log(data['OrderSize'][i]) +
+            gamma2_samples[j] * np.log(data['Volatility'][i])
+        )
+        r_pred = np.exp(
+            alpha0_samples[j] +
+            alpha1_samples[j] * np.log(data['OrderSize'][i])
+        )
+        kappa_pred = 0.5 * (r_pred + np.sqrt(4 + r_pred**2))
+        
+        # Draw samples from ALD for each observation
+        predicted_costs.append(asymmetric_laplace(loc=mu_pred, scale=b_pred, kappa=kappa_pred, size=1))
+predicted_costs = np.concatenate(predicted_costs)
+
+# Plot observed vs. predicted costs using histograms
 fig = go.Figure()
 
-# Add scatter plot of observed vs. predicted costs
-fig.add_trace(go.Scatter(
-    x=data['Cost'], 
-    y=predicted_costs,
-    mode='markers',
-    name='Observed vs. Predicted',
-    marker=dict(color='rgba(255, 0, 0, 0.6)')
+# Add histogram of observed costs
+fig.add_trace(go.Histogram(
+    x=data['Cost'],
+    nbinsx=20,
+    name='Observed Cost',
+    histnorm='probability density',  # Normalize to form a probability density
+    marker=dict(color='rgba(0, 0, 255, 0.5)')
 ))
 
-# Add line y=x for reference
-fig.add_trace(go.Scatter(
-    x=[min(data['Cost']), max(data['Cost'])],
-    y=[min(data['Cost']), max(data['Cost'])],
-    mode='lines',
-    name='Ideal Fit (y=x)',
-    line=dict(color='rgba(0, 0, 255, 0.5)', dash='dash')
+# Add histogram of predicted costs
+fig.add_trace(go.Histogram(
+    x=predicted_costs,
+    nbinsx=20,
+    name='Predicted Cost',
+    histnorm='probability density',  # Normalize to form a probability density
+    marker=dict(color='rgba(255, 0, 0, 0.5)')
 ))
 
 # Update layout
 fig.update_layout(
     title='Observed vs. Predicted Costs',
-    xaxis_title='Observed Cost',
-    yaxis_title='Predicted Cost',
-    showlegend=True
+    xaxis_title='Cost',
+    yaxis_title='Density',
+    barmode='overlay'
 )
 
 fig.show()
